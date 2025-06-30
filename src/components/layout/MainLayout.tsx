@@ -1,13 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import { Dashboard } from '../dashboard/Dashboard';
 import { Button } from '../common/Button';
 import { Modal } from '../common/Modal';
-import { ConnectedSensor, SavedSensorInfo, SensorType } from '../../types';
-import { Activity, Bluetooth, Play, Pause, Square, Plus, Timer, Loader, Info, History, Trash2, Edit3, Star, Maximize, Minimize, Zap, Users, Link, Download, BarChart3, ChevronDown, Settings, Droplets } from 'lucide-react';
+import { ConnectedSensor, SavedSensorInfo, SensorType, PanelLayout } from '../../types';
+import { Activity, Bluetooth, Play, Pause, Square, Plus, Timer, Loader, Info, History, Trash2, Edit3, Star, Maximize, Minimize, Zap, Users, Link, Download, BarChart3, ChevronDown, Settings, Droplets, Save, FilePlus } from 'lucide-react'; // Added Save, FilePlus
 import { useAppStore } from '../../store/useAppStore';
 import { ValueFormatter } from '../../utils/dataCalculations';
 import { SensorAssignmentModal } from './SensorAssignmentModal';
+import { SaveLayoutModal } from '../common/SaveLayoutModal'; // Import the new modal
+import { DEFAULT_LAYOUT_NAME } from '../../constants/defaultLayout';
+
 
 interface MainLayoutProps {
   connectedSensors: ConnectedSensor[];
@@ -31,6 +34,23 @@ interface MainLayoutProps {
     onDisconnect: (sensorId: string) => void;
   };
 }
+
+const LayoutControls = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-right: 20px; // Add some spacing from session controls
+`;
+
+const CurrentLayoutDisplay = styled.span`
+  font-size: 0.875rem;
+  color: #cbd5e1; // slate-300
+  padding: 6px 12px;
+  background-color: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+`;
+
 
 const AppContainer = styled.div<{ $isTrainingMode: boolean }>`
   min-height: 100vh;
@@ -78,6 +98,13 @@ const Header = styled.header<{ $isTrainingMode: boolean }>`
     }
   `}
 `;
+
+const LogoContainer = styled.div`
+ display: flex;
+ align-items: center;
+ gap: 16px; // Space between logo and layout controls
+`;
+
 
 const Logo = styled.h1<{ $isTrainingMode: boolean }>`
   font-size: ${({ $isTrainingMode }) => $isTrainingMode ? '1.25rem' : '1.5rem'};
@@ -553,12 +580,32 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
   onShowSensorModal,
   sensorModal
 }) => {
-  const { isTrainingMode, connectedTrainers, userProfiles, savedSensors, actions } = useAppStore();
+  const {
+    isTrainingMode,
+    connectedTrainers,
+    userProfiles,
+    savedSensors,
+    actions,
+    // Layout specific states and actions from useAppStore
+    layouts,
+    layoutNames,
+    currentLayoutId,
+    currentLayoutName,
+    layoutActions,
+  } = useAppStore();
+
+  const [isSaveLayoutModalOpen, setIsSaveLayoutModalOpen] = useState(false);
+
   const [showSensorDetails, setShowSensorDetails] = useState<Record<string, boolean>>({});
   const [activeTab, setActiveTab] = useState<'connected' | 'saved'>('connected');
   const [editingAlias, setEditingAlias] = useState<string | null>(null);
   const [aliasValue, setAliasValue] = useState('');
   const [showSensorAssignment, setShowSensorAssignment] = useState(false);
+
+  useEffect(() => {
+    layoutActions.initializeDefaultLayout();
+  }, [layoutActions]);
+
 
   const savedSensorsList = actions.getSavedSensors();
   const hasConnectedTrainer = Object.keys(connectedTrainers).length > 0;
@@ -659,6 +706,65 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
     sensorModal.onScan();
   };
 
+  const handleSaveLayoutClick = () => {
+    // If currentLayoutId is null or the special marker, it's a new/unsaved layout
+    if (!currentLayoutId || currentLayoutId === "unsaved_new_layout_marker") {
+      setIsSaveLayoutModalOpen(true);
+    } else {
+      // Directly save (overwrite) the existing layout
+      // We need the actual layout PanelLayout[] here.
+      // Assuming layouts[currentLayoutId] holds the current state of the dashboard panels.
+      const layoutToSave = layouts[currentLayoutId];
+      if (layoutToSave) {
+        layoutActions.saveLayout(currentLayoutName, layoutToSave);
+        // Optionally, add a notification "Layout saved!"
+      } else {
+        console.error("Error: Layout data not found for saving.");
+        // Fallback to opening modal if data is inconsistent
+        setIsSaveLayoutModalOpen(true);
+      }
+    }
+  };
+
+  const handleSaveModalSubmit = (name: string) => {
+    // The layout to save is what's currently active, which might be pointed to by
+    // currentLayoutId (if it's "unsaved_new_layout_marker") or it's the one
+    // being edited if currentLayoutId was null and prepareNewLayout was called.
+    let layoutToSave: PanelLayout[] | undefined;
+    if (currentLayoutId && layouts[currentLayoutId]) {
+      layoutToSave = layouts[currentLayoutId];
+    } else {
+      // Fallback or error: If no current layout is found (should not happen with prepareNewLayout)
+      // For safety, we could try to use a default or prevent saving.
+      // This indicates a potential logic flaw if currentLayoutId is null/marker and no layout is in layouts map for it.
+      console.error("Error: Cannot find layout data for new save operation.");
+      // As a fallback, could try to save the default layout, but this is not ideal.
+      // layoutToSave = defaultLayout; // This would be incorrect if user made changes.
+      // Better to ensure `prepareNewLayout` correctly sets up a temporary layout in the store.
+      // If `layouts[currentLayoutId]` is guaranteed by `updatePanelLayout` and `prepareNewLayout`, this else is not needed.
+      const unsavedMarker = "unsaved_new_layout_marker";
+      if (layouts[unsavedMarker]) {
+        layoutToSave = layouts[unsavedMarker];
+      } else {
+         alert("Could not save layout: current layout data is missing.");
+         setIsSaveLayoutModalOpen(false);
+         return;
+      }
+    }
+
+    if (layoutToSave) {
+      layoutActions.saveLayout(name, layoutToSave);
+    }
+    setIsSaveLayoutModalOpen(false);
+  };
+
+  const handlePrepareNewLayout = () => {
+    layoutActions.prepareNewLayout();
+    // The Dashboard component should then pick up that currentLayoutId points to a new layout
+    // and render the default panels for editing.
+  };
+
+
   const renderSensorData = (sensor: ConnectedSensor) => {
     if (!showSensorDetails[sensor.id]) return null;
 
@@ -741,10 +847,41 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
   return (
     <AppContainer $isTrainingMode={isTrainingMode}>
       <Header $isTrainingMode={isTrainingMode}>
-        <Logo $isTrainingMode={isTrainingMode}>
-          <Activity size={isTrainingMode ? 20 : 24} />
-          {!isTrainingMode && 'Training Console'}
-        </Logo>
+        <LogoContainer>
+          <Logo $isTrainingMode={isTrainingMode}>
+            <Activity size={isTrainingMode ? 20 : 24} />
+            {!isTrainingMode && 'Training Console'}
+          </Logo>
+          {!isTrainingMode && (
+            <LayoutControls>
+              <CurrentLayoutDisplay>
+                Layout: {currentLayoutName || DEFAULT_LAYOUT_NAME}
+                {currentLayoutId && currentLayoutId !== "unsaved_new_layout_marker" ? "" : " (Unsaved)"}
+              </CurrentLayoutDisplay>
+              <Button
+                variant="secondary"
+                size="small"
+                onClick={handlePrepareNewLayout}
+                icon={<FilePlus size={14} />}
+              >
+                New Layout
+              </Button>
+              <Button
+                variant="primary"
+                size="small"
+                onClick={handleSaveLayoutClick}
+                icon={<Save size={14} />}
+                // Disable if not in edit mode and no unsaved changes for an existing layout,
+                // or if it's a new layout that hasn't been "dirtied" (though prepareNewLayout marks it as changed)
+                // More sophisticated logic might be needed based on `hasUnsavedChanges` and `isEditMode`
+                disabled={isTrainingMode} // Example: disable save in training mode
+              >
+                {currentLayoutId && currentLayoutId !== "unsaved_new_layout_marker" ? 'Save Layout' : 'Save As...'}
+              </Button>
+              {/* TODO: Add Load Layout Dropdown/Modal here */}
+            </LayoutControls>
+          )}
+        </LogoContainer>
         
         <HeaderControls $isTrainingMode={isTrainingMode}>
           {!isTrainingMode && isMultiUserMode && (
@@ -1200,6 +1337,14 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
       <SensorAssignmentModal
         isOpen={showSensorAssignment}
         onClose={() => setShowSensorAssignment(false)}
+      />
+
+      <SaveLayoutModal
+        isOpen={isSaveLayoutModalOpen}
+        onClose={() => setIsSaveLayoutModalOpen(false)}
+        onSave={handleSaveModalSubmit}
+        currentName={currentLayoutId === "unsaved_new_layout_marker" || !currentLayoutId ? "New Layout" : currentLayoutName}
+        title={currentLayoutId && currentLayoutId !== "unsaved_new_layout_marker" ? "Save Layout As..." : "Save New Layout"}
       />
     </AppContainer>
   );
